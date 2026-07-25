@@ -1,0 +1,62 @@
+import { config } from "../config.js";
+import { getAuth, refreshAuth, type Auth } from "../auth/token.js";
+import { withSlot, sleep } from "./guard.js";
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+
+function headersFor(auth: Auth): Record<string, string> {
+  const base: Record<string, string> = {
+    "content-type": "application/json",
+    "anthropic-version": config.anthropicVersion,
+  };
+  if (auth.type === "api") {
+    base["x-api-key"] = auth.key;
+  } else {
+    // OAuth (subscription) tokens go on Authorization: Bearer + the oauth beta header.
+    base["authorization"] = `Bearer ${auth.token}`;
+    base["anthropic-beta"] = "oauth-2025-04-20";
+  }
+  return base;
+}
+
+/**
+ * Call Anthropic /v1/messages. Retries on 429/5xx with backoff, and refreshes
+ * the subscription token once on 401. Returns the raw fetch Response so callers
+ * can either .json() (non-stream) or pipe .body (stream).
+ */
+export async function callAnthropic(body: Record<string, unknown>, stream: boolean): Promise<Response> {
+  return withSlot(async () => {
+    let auth = await getAuth();
+    let attempt = 0;
+    const maxAttempts = 4;
+
+    while (true) {
+      attempt++;
+      const res = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        headers: headersFor(auth),
+        body: JSON.stringify({ ...body, stream }),
+      });
+
+      if (res.ok) return res;
+
+      // 401 → token likely expired; refresh once and retry immediately.
+      if (res.status === 401 && auth.type === "subscription" && attempt === 1) {
+        auth = await refreshAuth();
+        continue;
+      }
+      // 429 / 5xx → backoff and retry.
+      if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts) {
+        const retryAfter = Number(res.headers.get("retry-after"));
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 15000);
+        await sleep(delay);
+        continue;
+      }
+      // Give up — surface the upstream error body.
+      const errText = await res.text().catch(() => "");
+      const err = new Error(`Anthropic ${res.status}: ${errText.slice(0, 500)}`);
+      (err as any).status = res.status;
+      throw err;
+    }
+  });
+}

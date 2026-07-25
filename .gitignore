@@ -1,0 +1,13 @@
+# Secrets & local state — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Anthropic auth profile (subscription) — machine-local
+.anthropic/
+auth-profile/
+
+node_modules/
+dist/
+*.log
+.DS_Store
