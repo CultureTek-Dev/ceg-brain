@@ -30,15 +30,22 @@ if ! command -v node >/dev/null || [ "$(node -v | cut -c2- | cut -d. -f1)" -lt 2
 fi
 command -v pm2 >/dev/null || { say "Installing pm2…"; npm install -g pm2 >/dev/null; }
 
+# The `ant` CLI is only needed for BRAIN_BACKEND=subscription (which uses the
+# Anthropic *API plane* via OAuth — this bills API usage, NOT a Pro/Max
+# subscription; genuine subscription reuse needs Claude Code, see README).
+# For BRAIN_BACKEND=api you don't need `ant` at all.
 if ! command -v ant >/dev/null; then
-  say "Installing the Anthropic CLI (\`ant\`)…"
-  # Adjust if your platform differs — see https://platform.claude.com/docs/en/api/sdks/cli
-  if command -v go >/dev/null; then
-    go install github.com/anthropics/anthropic-cli/cmd/ant@latest
-    export PATH="$PATH:$(go env GOPATH)/bin"
+  say "Fetching the Anthropic CLI (\`ant\`)…  (skip with BRAIN_BACKEND=api)"
+  VER="$(curl -fsSL https://api.github.com/repos/anthropics/anthropic-cli/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+  OS="$(uname -s | tr A-Z a-z)"; ARCH="$(uname -m | sed -e s/x86_64/amd64/ -e s/aarch64/arm64/)"
+  if [ -n "$VER" ] && curl -fsSL "https://github.com/anthropics/anthropic-cli/releases/download/${VER}/ant_${VER#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C /usr/local/bin ant 2>/dev/null; then
+    say "Installed ant ${VER}"
+  elif command -v go >/dev/null; then
+    go install github.com/anthropics/anthropic-cli/cmd/ant@latest && export PATH="$PATH:$(go env GOPATH)/bin"
   else
-    say "Could not auto-install \`ant\` (no Go toolchain). Install it manually, then re-run."
-    say "  https://github.com/anthropics/anthropic-cli/releases"
+    say "Couldn't auto-install \`ant\`. NOTE: this is NOT \`apt install ant\` (that's Apache Ant)."
+    say "Either grab it from https://github.com/anthropics/anthropic-cli/releases,"
+    say "or — simpler — use the API backend: set BRAIN_BACKEND=api + ANTHROPIC_API_KEY in .env, then re-run."
   fi
 fi
 

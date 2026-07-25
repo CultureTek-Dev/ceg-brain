@@ -12,11 +12,15 @@ apps (OpenAI SDK) ──►  ceg-brain  ──►  Claude (subscription OAuth, o
                     per-app keys · cost logs · concurrency guard · token refresh
 ```
 
-> ⚠️ **Honest note.** Powering multiple apps from a single Claude *subscription* is
-> outside the subscription's intended personal/interactive use and can be
-> rate-limited or restricted. `ceg-brain` is built to survive that: flip
-> `BRAIN_BACKEND=api` in `.env` and every app keeps working unchanged. Verify the
-> subscription actually serves inference before relying on it (see **Auth spike**).
+> ⚠️ **Which backend actually uses my subscription? (read this.)**
+> The `ant` CLI authenticates the Anthropic **API plane** via OAuth — calls through
+> `BRAIN_BACKEND=subscription` therefore **bill API usage**, not a Claude Pro/Max
+> subscription. `api.anthropic.com` is not served by consumer subscriptions.
+> The **only** path that genuinely reuses a Pro/Max subscription is **Claude Code /
+> the Claude Agent SDK** with a subscription login — a heavier backend not yet wired
+> here. So today: `subscription` (via `ant`) ≈ API billing with OAuth instead of a
+> static key; `api` = API billing with a static key. Both are cheap and supported.
+> If you truly need subscription billing, open an issue — the Agent SDK backend is the plan.
 
 ## Install (one line on the VPS)
 
