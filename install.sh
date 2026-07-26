@@ -3,10 +3,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/CultureTek-Dev/ceg-brain/main/install.sh | bash
 #
 # What it does:
-#   1. Installs Node 20+ (if missing), the `ant` CLI, and pm2.
+#   1. Installs Node 20+ (if missing) and pm2.
 #   2. Clones/updates ceg-brain into ~/ceg-brain.
 #   3. Creates .env from .env.example (generates app keys if you let it).
-#   4. Prompts you to run `ant auth login` (subscription) — the ONE manual step.
+#   4. Checks for the subscription token (CLAUDE_CODE_OAUTH_TOKEN) — the ONE manual step:
+#      run `claude setup-token` on a machine with a browser and paste it into .env.
 #   5. Builds and starts the brain under pm2.
 set -euo pipefail
 
@@ -30,24 +31,11 @@ if ! command -v node >/dev/null || [ "$(node -v | cut -c2- | cut -d. -f1)" -lt 2
 fi
 command -v pm2 >/dev/null || { say "Installing pm2…"; npm install -g pm2 >/dev/null; }
 
-# The `ant` CLI is only needed for BRAIN_BACKEND=subscription (which uses the
-# Anthropic *API plane* via OAuth — this bills API usage, NOT a Pro/Max
-# subscription; genuine subscription reuse needs Claude Code, see README).
-# For BRAIN_BACKEND=api you don't need `ant` at all.
-if ! command -v ant >/dev/null; then
-  say "Fetching the Anthropic CLI (\`ant\`)…  (skip with BRAIN_BACKEND=api)"
-  VER="$(curl -fsSL https://api.github.com/repos/anthropics/anthropic-cli/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
-  OS="$(uname -s | tr A-Z a-z)"; ARCH="$(uname -m | sed -e s/x86_64/amd64/ -e s/aarch64/arm64/)"
-  if [ -n "$VER" ] && curl -fsSL "https://github.com/anthropics/anthropic-cli/releases/download/${VER}/ant_${VER#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C /usr/local/bin ant 2>/dev/null; then
-    say "Installed ant ${VER}"
-  elif command -v go >/dev/null; then
-    go install github.com/anthropics/anthropic-cli/cmd/ant@latest && export PATH="$PATH:$(go env GOPATH)/bin"
-  else
-    say "Couldn't auto-install \`ant\`. NOTE: this is NOT \`apt install ant\` (that's Apache Ant)."
-    say "Either grab it from https://github.com/anthropics/anthropic-cli/releases,"
-    say "or — simpler — use the API backend: set BRAIN_BACKEND=api + ANTHROPIC_API_KEY in .env, then re-run."
-  fi
-fi
+# The default subscription path needs NO CLI on the VPS — it reads the
+# CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`) straight from .env. The `ant` CLI
+# is only for the legacy fallback (BRAIN_BACKEND=subscription with no token set);
+# it is not installed by default. Grab it from
+# https://github.com/anthropics/anthropic-cli/releases if you specifically want it.
 
 # --- 2. Clone / update ------------------------------------------------------
 if [ -d "$DIR/.git" ]; then
@@ -74,14 +62,17 @@ chmod 600 .env
 
 # --- 4. Auth (the one manual step) -----------------------------------------
 BACKEND="$(grep -E '^BRAIN_BACKEND=' .env | cut -d= -f2 | tr -d ' ')"
-if [ "$BACKEND" = "subscription" ]; then
-  if ant auth print-credentials --access-token >/dev/null 2>&1; then
-    say "Claude subscription already authed on this box ✅"
+OAUTH_TOKEN="$(grep -E '^CLAUDE_CODE_OAUTH_TOKEN=' .env | cut -d= -f2- | tr -d ' ')"
+if [ "$BACKEND" = "subscription" ] && [ -z "$OAUTH_TOKEN" ]; then
+  if command -v ant >/dev/null && ant auth print-credentials --access-token >/dev/null 2>&1; then
+    say "No CLAUDE_CODE_OAUTH_TOKEN, but the \`ant\` CLI is authed — using the legacy fallback ✅"
   else
     say "──────────────────────────────────────────────────────────────"
-    say "ACTION NEEDED: authenticate this box to your Claude subscription."
-    say "Run:   ant auth login --no-browser"
-    say "…open the printed URL, approve, paste the code back. Then re-run this installer."
+    say "ACTION NEEDED: set your Claude subscription token."
+    say "On a machine WITH a browser, run:   claude setup-token"
+    say "…copy the sk-ant-oat01-… value, then in $DIR/.env set:"
+    say "    CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…"
+    say "Then re-run this installer."
     say "──────────────────────────────────────────────────────────────"
     exit 0
   fi

@@ -1,26 +1,34 @@
 # ceg-brain
 
 One Claude "brain" for many apps. `ceg-brain` is an **OpenAI-compatible gateway**
-that authenticates to Claude with your **Claude subscription** (via the `ant`
-OAuth profile on the box) — or an Anthropic **API key** as a fallback — and exposes
-a standard `/v1/chat/completions` endpoint. Your apps talk to it with any OpenAI SDK
-by pointing `baseURL` at the brain and using one of its app keys.
+that authenticates to Claude with your **Claude Pro/Max subscription** (via the Claude
+Code OAuth token, `claude setup-token`) — or an Anthropic **API key** as a fallback —
+and exposes a standard `/v1/chat/completions` endpoint. Your apps talk to it with any
+OpenAI SDK by pointing `baseURL` at the brain and using one of its app keys.
 
 ```
 apps (OpenAI SDK) ──►  ceg-brain  ──►  Claude (subscription OAuth, or API key)
      baseURL + key        │
-                    per-app keys · cost logs · concurrency guard · token refresh
+              per-app keys · cost logs · concurrency guard · Claude Code identity
 ```
 
-> ⚠️ **Which backend actually uses my subscription? (read this.)**
-> The `ant` CLI authenticates the Anthropic **API plane** via OAuth — calls through
-> `BRAIN_BACKEND=subscription` therefore **bill API usage**, not a Claude Pro/Max
-> subscription. `api.anthropic.com` is not served by consumer subscriptions.
-> The **only** path that genuinely reuses a Pro/Max subscription is **Claude Code /
-> the Claude Agent SDK** with a subscription login — a heavier backend not yet wired
-> here. So today: `subscription` (via `ant`) ≈ API billing with OAuth instead of a
-> static key; `api` = API billing with a static key. Both are cheap and supported.
-> If you truly need subscription billing, open an issue — the Agent SDK backend is the plan.
+**How the subscription path works.** `claude setup-token` mints a long-lived (~1yr)
+OAuth token (`sk-ant-oat01-…`) tied to your subscription — the same credential Claude
+Code uses headless. `ceg-brain` sends it as `Authorization: Bearer` with the
+`oauth-2025-04-20` beta header, and prepends the **Claude Code identity system block**
+(`You are Claude Code, Anthropic's official CLI for Claude.`) so the token is honoured.
+Requests then draw on your subscription's Claude Code rate limits, **not** pay-as-you-go
+API credits.
+
+> ⚠️ **Know the trade-offs before you rely on this.**
+> - **Usage policy.** Anthropic's terms don't sanction pointing product/app traffic at a
+>   personal subscription. This is fine for your *own* internal tools on your *own* box; it
+>   is not a way to resell inference. The token can be **rate-limited or revoked** — build a
+>   re-auth path, don't assume it's forever.
+> - **Rate limits are human-shaped** (5-hour Claude Code windows), so a busy backend
+>   exhausts them fast. `MAX_CONCURRENCY` serialises calls to protect one subscription.
+> - **Want predictable, sanctioned billing instead?** Set `BRAIN_BACKEND=api` with an
+>   `ANTHROPIC_API_KEY` — same gateway, pay-as-you-go API plane, no identity injection.
 
 ## Install (one line on the VPS)
 
@@ -28,15 +36,28 @@ apps (OpenAI SDK) ──►  ceg-brain  ──►  Claude (subscription OAuth, o
 curl -fsSL https://raw.githubusercontent.com/CultureTek-Dev/ceg-brain/main/install.sh | bash
 ```
 
-The installer sets up Node, `ant`, and pm2; clones the repo to `~/ceg-brain`;
-generates `.env` with app keys; and (for the subscription backend) tells you to run
-the **one manual step**:
+The installer sets up Node and pm2; clones the repo to `~/ceg-brain`; generates
+`.env` with app keys; and (for the subscription backend) tells you to do the **one
+manual step** — mint the token on a machine that has a browser, then drop it into
+`.env` on the VPS:
 
 ```bash
-ant auth login --no-browser    # open the URL, approve, paste the code back
+# on your laptop (needs a browser for the OAuth callback):
+claude setup-token            # → prints sk-ant-oat01-…
+```
+
+```bash
+# on the VPS, put it in ~/ceg-brain/.env:
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-…
 ```
 
 Re-run the installer and it builds + starts the brain under pm2.
+
+> Headless boxes never ran Claude Code's first-run wizard. If you ever invoke the
+> `claude` CLI on the VPS (e.g. the `ant`/CLI fallback), pre-seed
+> `~/.claude.json` with `{"hasCompletedOnboarding": true, "hasTrustDialogAccepted": true}`
+> for the service user so it doesn't block on the prompt. The default token path
+> above reads the env var directly and needs none of this.
 
 ## Expose a public base URL
 
@@ -75,40 +96,45 @@ They never hold Anthropic credentials — only a `ceg-brain` app key.
 
 ### Running the brain itself on Coolify
 
-Use the included `Dockerfile`. For the **subscription** backend, mount the `ant` OAuth
-profile (`~/.config/anthropic`) as a **persistent volume** into the container so the token
-survives redeploys — do the `ant auth login` once on the host into that dir. For the
-**api** backend, no volume is needed; just set `ANTHROPIC_API_KEY`.
+Use the included `Dockerfile`. For the **subscription** backend, just set
+`CLAUDE_CODE_OAUTH_TOKEN` as a container secret/env — it's a self-contained bearer, so
+no volume is needed and it survives redeploys. (Only the legacy `ant`-CLI fallback needs
+its OAuth profile mounted as a persistent volume.) For the **api** backend, set
+`ANTHROPIC_API_KEY`.
 
 ## Configuration (`.env`)
 
 | Var | Meaning |
 |-----|---------|
 | `BRAIN_KEYS` | `label:key` pairs — the keys your apps use; label drives cost logs |
-| `BRAIN_BACKEND` | `subscription` (via `ant`) or `api` (via `ANTHROPIC_API_KEY`) |
+| `BRAIN_BACKEND` | `subscription` (Claude Code OAuth token) or `api` (`ANTHROPIC_API_KEY`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | the `claude setup-token` value — powers the `subscription` backend |
+| `ANTHROPIC_BETA` | beta header sent with the OAuth token (default `oauth-2025-04-20`) |
+| `INJECT_CLAUDE_CODE_SYSTEM` | prepend the Claude Code identity block (default `1`; leave on) |
 | `ANTHROPIC_API_KEY` | only for the `api` backend |
 | `MAX_CONCURRENCY` | simultaneous upstream calls — protects one subscription from bursts |
 | `DEFAULT_MODEL` | model when a caller doesn't specify (or uses an alias) |
-| `TOKEN_REFRESH_MIN` | how often to refresh the subscription token |
+| `ANT_BIN` / `TOKEN_REFRESH_MIN` | legacy `ant`-CLI fallback: CLI path + token refresh cadence |
 | `FORWARD_SAMPLING` | forward `temperature`/`top_p`? Off — newer Claude models reject them |
 
 ## Auth spike — do this first
 
-Before wiring apps, confirm the subscription path actually works and is *the subscription*
-(not silent API billing):
+Before wiring apps, confirm the subscription token is accepted and that usage lands on
+*the subscription* (not API credits):
 
 ```bash
-ant auth login --no-browser
-ant auth print-credentials --access-token          # prints a bearer token
-# fire one call through the brain and confirm it answers:
+# with CLAUDE_CODE_OAUTH_TOKEN set in .env and the brain running, fire one call:
 curl -s http://127.0.0.1:8787/v1/chat/completions \
   -H "authorization: Bearer <an app key>" -H "content-type: application/json" \
   -d '{"model":"claude-opus-4-8","messages":[{"role":"user","content":"say hi"}]}'
 ```
 
-If that returns a completion **and** your Claude subscription usage moves (not API credits),
-you're good. If it bills the API, set `BRAIN_BACKEND=api` — you gain nothing from the
-subscription path and lose the risk.
+- **A completion comes back** → the OAuth token + Claude Code identity injection is working.
+- **`401` / "OAuth authentication is not supported" / an identity error** → the token was
+  rejected. Check `CLAUDE_CODE_OAUTH_TOKEN` is a fresh `sk-ant-oat01-…`, that
+  `INJECT_CLAUDE_CODE_SYSTEM=1`, and that `ANTHROPIC_API_KEY` is **unset** on this backend.
+- Confirm your Claude **subscription** usage moves (not API credits). If you'd rather bill
+  the API plane, set `BRAIN_BACKEND=api` with an `ANTHROPIC_API_KEY`.
 
 ## Endpoints
 

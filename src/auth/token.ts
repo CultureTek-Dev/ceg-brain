@@ -33,6 +33,12 @@ export async function getAuth(force = false): Promise<Auth> {
     if (!config.anthropicApiKey) throw new Error("backend=api but ANTHROPIC_API_KEY is not set");
     return { type: "api", key: config.anthropicApiKey };
   }
+  // Preferred: the `claude setup-token` value straight from the environment.
+  // It's a long-lived (~1yr) subscription OAuth bearer — no CLI, no refresh dance.
+  if (config.oauthToken) {
+    return { type: "subscription", token: config.oauthToken };
+  }
+  // Fallback: source a short-lived token from the `ant` CLI OAuth profile.
   const ttlMs = config.tokenRefreshMin * 60_000;
   if (force || !cachedToken || Date.now() - cachedAt > ttlMs) {
     cachedToken = await fetchSubscriptionToken();

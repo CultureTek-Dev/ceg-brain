@@ -39,7 +39,22 @@ export function toAnthropicBody(body: OpenAIChatBody) {
     max_tokens: body.max_tokens ?? 4096,
     messages,
   };
-  if (system.length) out.system = system.join("\n\n");
+
+  // System prompt. On the subscription (OAuth) backend the token is only honoured
+  // when the request presents as Claude Code: the FIRST system block must be the
+  // Claude Code identity string. We use the array form so the caller's own system
+  // prompt is preserved as a second block right after it.
+  const injectCC = config.backend === "subscription" && config.injectClaudeCodeSystem;
+  if (injectCC) {
+    const blocks: Array<{ type: "text"; text: string }> = [
+      { type: "text", text: config.claudeCodeSystem },
+    ];
+    if (system.length) blocks.push({ type: "text", text: system.join("\n\n") });
+    out.system = blocks;
+  } else if (system.length) {
+    out.system = system.join("\n\n");
+  }
+
   if (config.forwardSampling) {
     if (typeof body.temperature === "number") out.temperature = body.temperature;
     if (typeof body.top_p === "number") out.top_p = body.top_p;

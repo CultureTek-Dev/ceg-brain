@@ -13,8 +13,9 @@ function headersFor(auth: Auth): Record<string, string> {
     base["x-api-key"] = auth.key;
   } else {
     // OAuth (subscription) tokens go on Authorization: Bearer + the oauth beta header.
+    // NB: x-api-key must be ABSENT here — presenting both confuses the OAuth path.
     base["authorization"] = `Bearer ${auth.token}`;
-    base["anthropic-beta"] = "oauth-2025-04-20";
+    base["anthropic-beta"] = config.anthropicBeta;
   }
   return base;
 }
