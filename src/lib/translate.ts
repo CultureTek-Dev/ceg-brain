@@ -30,7 +30,10 @@ function textOf(content: unknown): string {
   return "";
 }
 
-export function toAnthropicBody(body: OpenAIChatBody) {
+export function toAnthropicBody(
+  body: OpenAIChatBody,
+  opts: { searchHandledLocally?: boolean; searchContext?: string } = {}
+) {
   const system: string[] = [];
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
 
@@ -39,6 +42,15 @@ export function toAnthropicBody(body: OpenAIChatBody) {
     if (m.role === "assistant") { messages.push({ role: "assistant", content: textOf(m.content) }); continue; }
     // user, tool, function, etc. → treat as user input
     messages.push({ role: "user", content: textOf(m.content) });
+  }
+
+  // Search results go in as a user turn immediately before the question, so the
+  // model treats them as given material rather than as instructions.
+  if (opts.searchContext && messages.length) {
+    messages.splice(messages.length - 1, 0, {
+      role: "user",
+      content: opts.searchContext,
+    });
   }
 
   const out: Record<string, unknown> = {
@@ -62,9 +74,11 @@ export function toAnthropicBody(body: OpenAIChatBody) {
     out.system = system.join("\n\n");
   }
 
-  // Web search runs server-side on Anthropic's infrastructure: Claude issues the
-  // queries and answers with citations, so the caller still just reads text.
-  if (wantsWebSearch(body)) {
+  // Web search. Two paths:
+  //  - a search provider is configured → results are injected as context by the
+  //    caller (see routes/chat.ts); no Anthropic tool is attached.
+  //  - otherwise → fall back to Anthropic's server-side tool.
+  if (wantsWebSearch(body) && !opts.searchHandledLocally) {
     out.tools = [
       {
         type: config.webSearch.toolType,

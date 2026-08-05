@@ -63,6 +63,17 @@ export const config = {
     // Append a "Sources" list built from the response's citations.
     appendSources: (process.env.WEB_SEARCH_APPEND_SOURCES ?? "1") === "1",
   },
+
+  // --- Brain-side search provider -----------------------------------------
+  // When SEARCH_API_KEY is set, WE run the search and give Claude the results,
+  // instead of using Anthropic's server-side tool (whose quota on the
+  // subscription token is too small to rely on). Inference stays on the
+  // subscription either way.
+  search: {
+    provider: (process.env.SEARCH_PROVIDER ?? "brave") as "brave" | "tavily",
+    apiKey: process.env.SEARCH_API_KEY ?? "",
+    resultsPerQuery: Number(process.env.SEARCH_RESULTS ?? 8),
+  },
 };
 
 if (config.keys.size === 0) {

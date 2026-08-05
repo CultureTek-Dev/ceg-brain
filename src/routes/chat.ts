@@ -11,6 +11,7 @@ import {
 } from "../lib/translate.js";
 import { resolveModel } from "../lib/models.js";
 import { config } from "../config.js";
+import * as search from "../lib/search.js";
 
 export function registerChat(app: FastifyInstance) {
   app.post("/v1/chat/completions", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -19,10 +20,40 @@ export function registerChat(app: FastifyInstance) {
       return reply.code(400).send({ error: { message: "messages[] is required" } });
     }
     const model = resolveModel(body.model);
-    const anthropicBody = toAnthropicBody(body);
     const wantStream = body.stream === true;
-
     const searching = wantsWebSearch(body);
+
+    // Prefer brain-side search when a provider is configured: Anthropic's
+    // server-side tool is entitled on the subscription token but rate-limited
+    // to the point of being unusable.
+    let localResults: search.SearchResult[] = [];
+    let searchContext: string | undefined;
+    const useLocalSearch = searching && search.enabled();
+
+    if (useLocalSearch) {
+      const query = [...(body.messages ?? [])]
+        .reverse()
+        .find((m: any) => m.role === "user");
+      const q =
+        typeof query?.content === "string"
+          ? query.content
+          : JSON.stringify(query?.content ?? "");
+      try {
+        localResults = await search.search(q);
+        if (localResults.length) searchContext = search.asContext(localResults, q);
+        req.log.info(
+          { label: (req as any).appLabel, provider: config.search.provider, results: localResults.length },
+          "search"
+        );
+      } catch (e: any) {
+        req.log.error({ err: e?.message, provider: config.search.provider }, "search failed");
+      }
+    }
+
+    const anthropicBody = toAnthropicBody(body, {
+      searchHandledLocally: useLocalSearch,
+      searchContext,
+    });
 
     // Non-streaming: resolve any paused server-tool turns before replying.
     if (!wantStream) {
@@ -32,7 +63,9 @@ export function registerChat(app: FastifyInstance) {
 
         // Web search answers are only useful with their references attached.
         if (searching && config.webSearch.appendSources) {
-          const sources = sourcesFrom(json);
+          const sources = useLocalSearch
+            ? localResults.map((r) => `- [${r.title}](${r.url})`)
+            : sourcesFrom(json);
           if (sources.length && out.choices[0]?.message) {
             out.choices[0].message.content += `\n\n**Sources**\n${sources.join("\n")}`;
           }
@@ -43,8 +76,8 @@ export function registerChat(app: FastifyInstance) {
         // error — the caller can't tell a sourced answer from a remembered one —
         // so say it in the response, not just the logs.
         if (searching) {
-          const errors = searchErrorsFrom(json);
-          const attempts = searchAttempts(json);
+          const errors = useLocalSearch ? [] : searchErrorsFrom(json);
+          const attempts = useLocalSearch ? localResults.length : searchAttempts(json);
 
           if (errors.length) {
             req.log.error({ label: (req as any).appLabel, attempts, errors }, "web_search failed");
@@ -52,7 +85,9 @@ export function registerChat(app: FastifyInstance) {
             req.log.warn({ label: (req as any).appLabel }, "web_search never invoked");
           }
 
-          const searched = attempts > 0 && errors.length < attempts;
+          const searched = useLocalSearch
+            ? localResults.length > 0
+            : attempts > 0 && errors.length < attempts;
           if (!searched && out.choices[0]?.message) {
             const why = errors.includes("too_many_requests")
               ? "the web-search quota is currently exhausted"
