@@ -16,7 +16,16 @@ const ALIASES: Record<string, string> = {
   "opus": "claude-opus-4-8",
   "sonnet": "claude-sonnet-5",
   "haiku": "claude-haiku-4-5",
+  // Sugar: "research" = the most capable model with web search switched on.
+  "research": "claude-opus-4-8",
 };
+
+/** Model names that imply web search without the caller passing the flag. */
+const SEARCH_MODELS = new Set(["research"]);
+
+export function impliesWebSearch(requested?: string): boolean {
+  return !!requested && SEARCH_MODELS.has(requested.toLowerCase());
+}
 
 export function resolveModel(requested?: string): string {
   if (!requested) return config.defaultModel;

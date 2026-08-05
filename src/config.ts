@@ -47,6 +47,22 @@ export const config = {
   claudeCodeSystem: CLAUDE_CODE_SYSTEM,
   maxConcurrency: Number(process.env.MAX_CONCURRENCY ?? 3),
   forwardSampling: (process.env.FORWARD_SAMPLING ?? "0") === "1",
+
+  // --- Web search (server-side tool, runs on Anthropic's side) -------------
+  // Enabled per-request with  "web_search": true  in the body, or by asking for
+  // the "research" model. Claude runs the searches itself and answers with
+  // citations; callers still just read choices[0].message.content.
+  webSearch: {
+    // _20260209 is the dynamic-filtering variant (Opus 4.6+, Sonnet 4.6+).
+    toolType: process.env.WEB_SEARCH_TOOL_TYPE ?? "web_search_20260209",
+    // Bounds cost/latency: how many searches Claude may run per request.
+    maxUses: Number(process.env.WEB_SEARCH_MAX_USES ?? 8),
+    // A server-tool turn can stop with stop_reason "pause_turn"; we resume it
+    // this many times before returning whatever we have.
+    maxContinuations: Number(process.env.WEB_SEARCH_MAX_CONTINUATIONS ?? 4),
+    // Append a "Sources" list built from the response's citations.
+    appendSources: (process.env.WEB_SEARCH_APPEND_SOURCES ?? "1") === "1",
+  },
 };
 
 if (config.keys.size === 0) {

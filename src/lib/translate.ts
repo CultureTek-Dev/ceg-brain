@@ -1,5 +1,10 @@
 import { config } from "../config.js";
-import { resolveModel } from "./models.js";
+import { resolveModel, impliesWebSearch } from "./models.js";
+
+/** Should this request run with the web-search server tool? */
+export function wantsWebSearch(body: { model?: string; web_search?: boolean }): boolean {
+  return body.web_search === true || impliesWebSearch(body.model);
+}
 
 // --- OpenAI request → Anthropic Messages request ------------------------
 
@@ -11,6 +16,8 @@ interface OpenAIChatBody {
   temperature?: number;
   top_p?: number;
   stream?: boolean;
+  /** Non-standard: let Claude search the web and answer with citations. */
+  web_search?: boolean;
 }
 
 function textOf(content: unknown): string {
@@ -55,11 +62,39 @@ export function toAnthropicBody(body: OpenAIChatBody) {
     out.system = system.join("\n\n");
   }
 
+  // Web search runs server-side on Anthropic's infrastructure: Claude issues the
+  // queries and answers with citations, so the caller still just reads text.
+  if (wantsWebSearch(body)) {
+    out.tools = [
+      {
+        type: config.webSearch.toolType,
+        name: "web_search",
+        max_uses: config.webSearch.maxUses,
+      },
+    ];
+  }
+
   if (config.forwardSampling) {
     if (typeof body.temperature === "number") out.temperature = body.temperature;
     if (typeof body.top_p === "number") out.top_p = body.top_p;
   }
   return out;
+}
+
+/**
+ * Collect unique sources from a response's citations so the answer carries its
+ * references even though we only return plain text.
+ */
+export function sourcesFrom(anthropic: any): string[] {
+  const seen = new Map<string, string>();
+  for (const block of anthropic?.content ?? []) {
+    if (block?.type !== "text") continue;
+    for (const c of block.citations ?? []) {
+      const url = c?.url;
+      if (url && !seen.has(url)) seen.set(url, c.title || url);
+    }
+  }
+  return [...seen].map(([url, title]) => `- [${title}](${url})`);
 }
 
 // --- Anthropic non-stream response → OpenAI chat.completion -------------

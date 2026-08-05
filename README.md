@@ -136,6 +136,29 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
 - Confirm your Claude **subscription** usage moves (not API credits). If you'd rather bill
   the API plane, set `BRAIN_BACKEND=api` with an `ANTHROPIC_API_KEY`.
 
+## Web search
+
+Claude can search the web server-side and answer with citations — the caller still
+just reads `choices[0].message.content`, so any OpenAI SDK works unchanged.
+
+```bash
+# either: ask for the "research" model …
+-d '{"model":"research","messages":[{"role":"user","content":"Compare UAE vs Portugal for incorporation"}]}'
+
+# … or set the flag on any model
+-d '{"model":"opus","web_search":true,"messages":[…]}'
+```
+
+Sources found during the search are appended to the answer as a **Sources** list.
+
+Notes:
+- Only on the **non-streaming** path. A search turn can pause mid-run
+  (`stop_reason: "pause_turn"`); the brain resumes it automatically, which the
+  streaming path can't do — a streamed search would truncate silently.
+- `WEB_SEARCH_MAX_USES` (default 8) bounds searches per request.
+- Searching costs more and takes longer than a plain completion; don't turn it on
+  by default.
+
 ## Endpoints
 
 - `POST /v1/chat/completions` — OpenAI chat completions (stream + non-stream)

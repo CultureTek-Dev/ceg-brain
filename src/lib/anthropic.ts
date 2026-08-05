@@ -21,6 +21,34 @@ function headersFor(auth: Auth): Record<string, string> {
 }
 
 /**
+ * Non-streaming call that completes server-tool work before returning.
+ *
+ * A request using a server tool (web search) can come back with
+ * stop_reason "pause_turn" when Anthropic's internal loop hits its iteration
+ * limit. That is not an error and not the end of the answer — you resume by
+ * sending the conversation back with the assistant turn appended. Without this
+ * the caller silently receives a half-finished research answer.
+ */
+export async function callAnthropicJson(body: Record<string, unknown>): Promise<any> {
+  let current = body;
+  let last: any;
+
+  for (let i = 0; i <= config.webSearch.maxContinuations; i++) {
+    const res = await callAnthropic(current, false);
+    last = await res.json();
+    if (last?.stop_reason !== "pause_turn") return last;
+
+    // Resume: replay the conversation plus the paused assistant turn.
+    const messages = [
+      ...((current.messages as unknown[]) ?? []),
+      { role: "assistant", content: last.content },
+    ];
+    current = { ...current, messages };
+  }
+  return last; // still paused after maxContinuations — return what we have
+}
+
+/**
  * Call Anthropic /v1/messages. Retries on 429/5xx with backoff, and refreshes
  * the subscription token once on 401. Returns the raw fetch Response so callers
  * can either .json() (non-stream) or pipe .body (stream).

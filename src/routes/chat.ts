@@ -1,7 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { callAnthropic } from "../lib/anthropic.js";
-import { toAnthropicBody, toOpenAIResponse, openAIChunk } from "../lib/translate.js";
+import { callAnthropic, callAnthropicJson } from "../lib/anthropic.js";
+import {
+  toAnthropicBody,
+  toOpenAIResponse,
+  openAIChunk,
+  wantsWebSearch,
+  sourcesFrom,
+} from "../lib/translate.js";
 import { resolveModel } from "../lib/models.js";
+import { config } from "../config.js";
 
 export function registerChat(app: FastifyInstance) {
   app.post("/v1/chat/completions", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -13,6 +20,34 @@ export function registerChat(app: FastifyInstance) {
     const anthropicBody = toAnthropicBody(body);
     const wantStream = body.stream === true;
 
+    const searching = wantsWebSearch(body);
+
+    // Non-streaming: resolve any paused server-tool turns before replying.
+    if (!wantStream) {
+      try {
+        const json = await callAnthropicJson(anthropicBody);
+        const out = toOpenAIResponse(json, model);
+
+        // Web search answers are only useful with their references attached.
+        if (searching && config.webSearch.appendSources) {
+          const sources = sourcesFrom(json);
+          if (sources.length && out.choices[0]?.message) {
+            out.choices[0].message.content += `\n\n**Sources**\n${sources.join("\n")}`;
+          }
+        }
+
+        req.log.info(
+          { label: (req as any).appLabel, model, searching, usage: out.usage },
+          "completion"
+        );
+        return reply.send(out);
+      } catch (e: any) {
+        const status = e?.status && e.status >= 400 && e.status < 600 ? e.status : 502;
+        req.log.error({ err: e?.message, label: (req as any).appLabel }, "upstream error");
+        return reply.code(status).send({ error: { message: e?.message ?? "upstream error" } });
+      }
+    }
+
     let upstream: Response;
     try {
       upstream = await callAnthropic(anthropicBody, wantStream);
@@ -20,13 +55,6 @@ export function registerChat(app: FastifyInstance) {
       const status = e?.status && e.status >= 400 && e.status < 600 ? e.status : 502;
       req.log.error({ err: e?.message, label: (req as any).appLabel }, "upstream error");
       return reply.code(status).send({ error: { message: e?.message ?? "upstream error" } });
-    }
-
-    if (!wantStream) {
-      const json = await upstream.json();
-      const out = toOpenAIResponse(json, model);
-      req.log.info({ label: (req as any).appLabel, model, usage: out.usage }, "completion");
-      return reply.send(out);
     }
 
     // Streaming: translate Anthropic SSE → OpenAI chat.completion.chunk SSE.
