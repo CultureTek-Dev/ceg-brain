@@ -6,6 +6,8 @@ import {
   openAIChunk,
   wantsWebSearch,
   sourcesFrom,
+  searchErrorsFrom,
+  searchAttempts,
 } from "../lib/translate.js";
 import { resolveModel } from "../lib/models.js";
 import { config } from "../config.js";
@@ -33,6 +35,21 @@ export function registerChat(app: FastifyInstance) {
           const sources = sourcesFrom(json);
           if (sources.length && out.choices[0]?.message) {
             out.choices[0].message.content += `\n\n**Sources**\n${sources.join("\n")}`;
+          }
+        }
+
+        // A failed search still returns HTTP 200 with a prose apology, so log
+        // the tool's own error codes — otherwise it looks like nothing happened.
+        if (searching) {
+          const errors = searchErrorsFrom(json);
+          const attempts = searchAttempts(json);
+          if (errors.length) {
+            req.log.error(
+              { label: (req as any).appLabel, attempts, errors },
+              "web_search failed"
+            );
+          } else if (attempts === 0) {
+            req.log.warn({ label: (req as any).appLabel }, "web_search never invoked");
           }
         }
 

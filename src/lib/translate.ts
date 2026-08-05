@@ -82,6 +82,33 @@ export function toAnthropicBody(body: OpenAIChatBody) {
 }
 
 /**
+ * Error codes reported by the web_search server tool, if any.
+ *
+ * A failed search does NOT fail the request: Claude just answers without it and
+ * says so in prose, which looks like "search silently did nothing". Surfacing
+ * the codes is the only way to tell "not entitled" from "rate limited".
+ */
+export function searchErrorsFrom(anthropic: any): string[] {
+  const errors: string[] = [];
+  for (const block of anthropic?.content ?? []) {
+    if (block?.type !== "web_search_tool_result") continue;
+    const c = block.content;
+    // Success is a LIST of results; an error is a single object.
+    if (c && !Array.isArray(c) && (c.error_code || c.type === "web_search_tool_result_error")) {
+      errors.push(String(c.error_code ?? "unknown"));
+    }
+  }
+  return errors;
+}
+
+/** Did Claude actually attempt any searches? */
+export function searchAttempts(anthropic: any): number {
+  return (anthropic?.content ?? []).filter(
+    (b: any) => b?.type === "server_tool_use" && b?.name === "web_search"
+  ).length;
+}
+
+/**
  * Collect unique sources from a response's citations so the answer carries its
  * references even though we only return plain text.
  */
