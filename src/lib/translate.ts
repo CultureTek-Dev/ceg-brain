@@ -82,46 +82,82 @@ export function toAnthropicBody(body: OpenAIChatBody) {
 }
 
 /**
- * Error codes reported by the web_search server tool, if any.
+ * How the _20260209 web-search tool actually behaves.
  *
- * A failed search does NOT fail the request: Claude just answers without it and
- * says so in prose, which looks like "search silently did nothing". Surfacing
- * the codes is the only way to tell "not entitled" from "rate limited".
+ * With dynamic filtering, Anthropic runs the search INSIDE code execution rather
+ * than as a plain tool call. So a successful search looks like:
+ *   server_tool_use { name: "code_execution", input.code: "... await web_search(...)" }
+ *   code_execution_tool_result { content: { stdout: "<titles and urls>" } }
+ * There are no web_search_tool_result blocks and no `citations` arrays — the
+ * model reads the results out of stdout. Parsers written for the plain
+ * web_search tool see nothing and wrongly report "never invoked".
+ */
+function isSearchCall(b: any): boolean {
+  if (b?.type !== "server_tool_use") return false;
+  if (b.name === "web_search") return true; // plain (non-filtering) variant
+  return b.name === "code_execution" && /web_search\s*\(/.test(JSON.stringify(b.input ?? ""));
+}
+
+/**
+ * Error codes from the search, if any. A failed search does NOT fail the
+ * request — Claude answers without it and apologises in prose — so these codes
+ * are the only way to tell "not entitled" from "rate limited".
  */
 export function searchErrorsFrom(anthropic: any): string[] {
   const errors: string[] = [];
   for (const block of anthropic?.content ?? []) {
-    if (block?.type !== "web_search_tool_result") continue;
-    const c = block.content;
-    // Success is a LIST of results; an error is a single object.
-    if (c && !Array.isArray(c) && (c.error_code || c.type === "web_search_tool_result_error")) {
-      errors.push(String(c.error_code ?? "unknown"));
+    // Plain variant.
+    if (block?.type === "web_search_tool_result") {
+      const c = block.content;
+      if (c && !Array.isArray(c) && (c.error_code || c.type === "web_search_tool_result_error")) {
+        errors.push(String(c.error_code ?? "unknown"));
+      }
+    }
+    // Dynamic-filtering variant: the search runs in code execution.
+    if (block?.type === "code_execution_tool_result") {
+      const c = block.content;
+      if (c?.error_code) errors.push(String(c.error_code));
+      else if (typeof c?.return_code === "number" && c.return_code !== 0) {
+        errors.push(`exit ${c.return_code}: ${(c.stderr ?? "").slice(0, 200)}`);
+      }
     }
   }
   return errors;
 }
 
-/** Did Claude actually attempt any searches? */
+/** How many searches Claude actually ran. */
 export function searchAttempts(anthropic: any): number {
-  return (anthropic?.content ?? []).filter(
-    (b: any) => b?.type === "server_tool_use" && b?.name === "web_search"
-  ).length;
+  return (anthropic?.content ?? []).filter(isSearchCall).length;
 }
 
 /**
  * Collect unique sources from a response's citations so the answer carries its
  * references even though we only return plain text.
  */
-export function sourcesFrom(anthropic: any): string[] {
+export function sourcesFrom(anthropic: any, limit = 12): string[] {
   const seen = new Map<string, string>();
+
   for (const block of anthropic?.content ?? []) {
-    if (block?.type !== "text") continue;
-    for (const c of block.citations ?? []) {
-      const url = c?.url;
-      if (url && !seen.has(url)) seen.set(url, c.title || url);
+    // Plain variant: proper citation objects on text blocks.
+    if (block?.type === "text") {
+      for (const c of block.citations ?? []) {
+        if (c?.url && !seen.has(c.url)) seen.set(c.url, c.title || c.url);
+      }
+    }
+    // Dynamic-filtering variant: the model prints results to stdout, so the URLs
+    // are in the code-execution output rather than in a citations array.
+    if (block?.type === "code_execution_tool_result") {
+      const stdout: string = block?.content?.stdout ?? "";
+      for (const m of stdout.matchAll(/https?:\/\/[^\s)"'`\]]+/g)) {
+        const url = m[0].replace(/[.,;:]+$/, "");
+        if (!seen.has(url)) seen.set(url, url);
+      }
     }
   }
-  return [...seen].map(([url, title]) => `- [${title}](${url})`);
+
+  return [...seen]
+    .slice(0, limit)
+    .map(([url, title]) => (title === url ? `- ${url}` : `- [${title}](${url})`));
 }
 
 // --- Anthropic non-stream response → OpenAI chat.completion -------------
