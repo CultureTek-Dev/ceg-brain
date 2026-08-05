@@ -1,6 +1,7 @@
 import { config } from "../config.js";
 import { getAuth, refreshAuth, type Auth } from "../auth/token.js";
 import { withSlot, sleep } from "./guard.js";
+import { capture as captureRateLimit } from "./ratelimit.js";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
@@ -67,7 +68,11 @@ export async function callAnthropic(body: Record<string, unknown>, stream: boole
         body: JSON.stringify({ ...body, stream }),
       });
 
-      if (res.ok) return res;
+      if (res.ok) {
+        // Snapshot rate-limit headers (window state) before the body is consumed.
+        try { captureRateLimit(res.headers); } catch { /* never break a request */ }
+        return res;
+      }
 
       // 401 → token likely expired; refresh once and retry immediately.
       if (res.status === 401 && auth.type === "subscription" && attempt === 1) {

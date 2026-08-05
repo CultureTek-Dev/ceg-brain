@@ -12,6 +12,7 @@ import {
 import { resolveModel } from "../lib/models.js";
 import { config } from "../config.js";
 import * as search from "../lib/search.js";
+import * as metrics from "../lib/metrics.js";
 
 export function registerChat(app: FastifyInstance) {
   app.post("/v1/chat/completions", async (req: FastifyRequest, reply: FastifyReply) => {
@@ -22,6 +23,23 @@ export function registerChat(app: FastifyInstance) {
     const model = resolveModel(body.model);
     const wantStream = body.stream === true;
     const searching = wantsWebSearch(body);
+
+    // Usage tracking: one row per request. Never throws (see metrics.record).
+    const started = Date.now();
+    const rec = (o: { status: number; inputTokens?: number; outputTokens?: number; error?: string | null }) =>
+      metrics.record({
+        ts: started,
+        appLabel: (req as any).appLabel ?? "unknown",
+        requestedModel: body.model ?? "",
+        resolvedModel: model,
+        stream: wantStream,
+        searching,
+        status: o.status,
+        inputTokens: o.inputTokens ?? 0,
+        outputTokens: o.outputTokens ?? 0,
+        latencyMs: Date.now() - started,
+        error: o.error ?? null,
+      });
 
     // Prefer brain-side search when a provider is configured: Anthropic's
     // server-side tool is entitled on the subscription token but rate-limited
@@ -104,10 +122,12 @@ export function registerChat(app: FastifyInstance) {
           { label: (req as any).appLabel, model, searching, usage: out.usage },
           "completion"
         );
+        rec({ status: 200, inputTokens: out.usage.prompt_tokens, outputTokens: out.usage.completion_tokens });
         return reply.send(out);
       } catch (e: any) {
         const status = e?.status && e.status >= 400 && e.status < 600 ? e.status : 502;
         req.log.error({ err: e?.message, label: (req as any).appLabel }, "upstream error");
+        rec({ status, error: e?.message });
         return reply.code(status).send({ error: { message: e?.message ?? "upstream error" } });
       }
     }
@@ -118,6 +138,7 @@ export function registerChat(app: FastifyInstance) {
     } catch (e: any) {
       const status = e?.status && e.status >= 400 && e.status < 600 ? e.status : 502;
       req.log.error({ err: e?.message, label: (req as any).appLabel }, "upstream error");
+      rec({ status, error: e?.message });
       return reply.code(status).send({ error: { message: e?.message ?? "upstream error" } });
     }
 
@@ -130,6 +151,12 @@ export function registerChat(app: FastifyInstance) {
     const write = (obj: unknown) => reply.raw.write(`data: ${JSON.stringify(obj)}\n\n`);
     write(openAIChunk(model, { role: "assistant" }));
 
+    // Usage arrives in the stream itself: input_tokens on message_start, the
+    // running output_tokens on message_delta. Capture both so streamed requests
+    // are tracked as accurately as non-streamed ones.
+    let inTok = 0;
+    let outTok = 0;
+    let streamErr: string | null = null;
     try {
       const decoder = new TextDecoder();
       let buf = "";
@@ -146,7 +173,12 @@ export function registerChat(app: FastifyInstance) {
           if (!data || data === "[DONE]") continue;
           let evt: any;
           try { evt = JSON.parse(data); } catch { continue; }
-          if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+          if (evt.type === "message_start") {
+            inTok = evt.message?.usage?.input_tokens ?? inTok;
+            outTok = evt.message?.usage?.output_tokens ?? outTok;
+          } else if (evt.type === "message_delta") {
+            outTok = evt.usage?.output_tokens ?? outTok;
+          } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
             write(openAIChunk(model, { content: evt.delta.text }));
           } else if (evt.type === "message_stop") {
             write(openAIChunk(model, {}, "stop"));
@@ -154,10 +186,12 @@ export function registerChat(app: FastifyInstance) {
         }
       }
     } catch (e: any) {
+      streamErr = e?.message ?? "stream error";
       req.log.error({ err: e?.message }, "stream error");
     } finally {
       reply.raw.write("data: [DONE]\n\n");
       reply.raw.end();
+      rec({ status: streamErr ? 502 : 200, inputTokens: inTok, outputTokens: outTok, error: streamErr });
     }
     return reply;
   });

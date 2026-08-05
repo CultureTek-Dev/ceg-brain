@@ -74,6 +74,20 @@ export const config = {
     apiKey: process.env.SEARCH_API_KEY ?? "",
     resultsPerQuery: Number(process.env.SEARCH_RESULTS ?? 8),
   },
+
+  // --- Usage tracking / dashboard -----------------------------------------
+  // One row per request (tokens, latency, status, rate-limit snapshot) in a
+  // local SQLite file, surfaced by an authenticated /dashboard.
+  metrics: {
+    enabled: (process.env.METRICS_ENABLED ?? "1") === "1",
+    // SQLite path. Relative resolves against the process cwd (~/ceg-brain).
+    dbPath: process.env.METRICS_DB ?? "./data/metrics.db",
+    // Guards the dashboard's data API. Empty ⇒ dashboard disabled.
+    dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
+    // Fallback for "% of window consumed" when upstream returns no usable
+    // rate-limit headers: assumed token budget per 5-hour window (0 = off).
+    windowTokenBudget: Number(process.env.WINDOW_TOKEN_BUDGET ?? 0),
+  },
 };
 
 if (config.keys.size === 0) {

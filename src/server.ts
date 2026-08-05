@@ -1,8 +1,10 @@
 import Fastify from "fastify";
 import { config } from "./config.js";
 import { registerChat } from "./routes/chat.js";
+import { registerDashboard } from "./routes/dashboard.js";
 import { LISTED_MODELS } from "./lib/models.js";
 import { getAuth } from "./auth/token.js";
+import * as metrics from "./lib/metrics.js";
 
 const app = Fastify({ logger: true, bodyLimit: 5 * 1024 * 1024 });
 
@@ -28,8 +30,12 @@ app.get("/v1/models", async () => ({
 }));
 
 registerChat(app);
+registerDashboard(app);
 
 async function main() {
+  // Open the metrics DB (no-op if METRICS_ENABLED=0).
+  metrics.init();
+
   // Fail fast if the subscription backend can't produce a token.
   try {
     const auth = await getAuth();
@@ -40,6 +46,11 @@ async function main() {
   }
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`[ceg-brain] listening on ${config.host}:${config.port}  (${config.keys.size} app key(s))`);
+  if (config.metrics.enabled && config.metrics.dashboardToken) {
+    app.log.info(`[ceg-brain] dashboard at /dashboard (token-gated)`);
+  } else if (config.metrics.enabled) {
+    app.log.warn(`[ceg-brain] metrics on, but DASHBOARD_TOKEN unset — /dashboard data API is disabled`);
+  }
 }
 
 main().catch((e) => {

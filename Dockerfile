@@ -1,7 +1,10 @@
 # Multi-stage build for Coolify (or any Docker host).
-# NOTE: for the subscription backend, the `ant` OAuth profile must be available
-# at runtime. Mount it as a volume (see README → Coolify) — do NOT bake it into
-# the image. The API-key backend needs no such mount.
+# NOTE: the subscription backend just needs CLAUDE_CODE_OAUTH_TOKEN as an env/secret
+# — no volume or profile mount. The API-key backend needs ANTHROPIC_API_KEY.
+# The usage dashboard's SQLite DB (./data) is ephemeral in a container; mount a
+# volume at /app/data (or set METRICS_DB) if you want usage history to persist.
+# better-sqlite3 installs a prebuilt binary on common linux archs; on exotic archs
+# add build tooling (apt-get install -y python3 make g++) before npm install.
 FROM node:20-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./

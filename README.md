@@ -159,8 +159,35 @@ Notes:
 - Searching costs more and takes longer than a plain completion; don't turn it on
   by default.
 
+## Usage dashboard
+
+The brain records **one row per request** — timestamp, app key, model, input/output
+tokens, latency, status, and a snapshot of the upstream rate-limit headers — into a
+local **SQLite** file (`./data/metrics.db`, gitignored). A built-in dashboard surfaces it:
+
+```
+https://brain.ceg.ag/dashboard
+```
+
+Set a `DASHBOARD_TOKEN` in `.env` first (`openssl rand -hex 24`) — the page prompts for
+it once and keeps it in your browser. It shows: total queries/tokens, tokens over time,
+per-app-key and per-model breakdowns, and a **recent-queries** table with per-query token
+counts and **% of the subscription window consumed**.
+
+- **"Window used"** comes from Anthropic's `anthropic-ratelimit-*` headers when present
+  (the real 5-hour subscription window). If the plane returns no usable limit headers, set
+  `WINDOW_TOKEN_BUDGET` to an assumed per-window token budget and the dashboard computes a
+  **"% of budget"** figure instead.
+- The dashboard data API (`GET /admin/stats`) is guarded by `DASHBOARD_TOKEN`, separate
+  from your app keys. Streamed and non-streamed requests are both tracked.
+- SQLite handles this write volume trivially and needs no external DB. Back up
+  `data/metrics.db` if you want history to survive a box rebuild. Disable everything with
+  `METRICS_ENABLED=0`.
+
 ## Endpoints
 
 - `POST /v1/chat/completions` — OpenAI chat completions (stream + non-stream)
 - `GET  /v1/models` — lists the Claude models
 - `GET  /health` — liveness (no auth)
+- `GET  /dashboard` — usage dashboard (HTML; data API gated by `DASHBOARD_TOKEN`)
+- `GET  /admin/stats` — dashboard JSON (`?range=1h|24h|7d|30d|all`, `Authorization: Bearer <DASHBOARD_TOKEN>`)
