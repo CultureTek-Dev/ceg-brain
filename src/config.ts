@@ -56,7 +56,7 @@ export const config = {
     // _20260209 is the dynamic-filtering variant (Opus 4.6+, Sonnet 4.6+).
     toolType: process.env.WEB_SEARCH_TOOL_TYPE ?? "web_search_20260209",
     // Bounds cost/latency: how many searches Claude may run per request.
-    maxUses: Number(process.env.WEB_SEARCH_MAX_USES ?? 8),
+    maxUses: Number(process.env.WEB_SEARCH_MAX_USES ?? 5),
     // A server-tool turn can stop with stop_reason "pause_turn"; we resume it
     // this many times before returning whatever we have.
     maxContinuations: Number(process.env.WEB_SEARCH_MAX_CONTINUATIONS ?? 4),

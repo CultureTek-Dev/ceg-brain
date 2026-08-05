@@ -38,18 +38,30 @@ export function registerChat(app: FastifyInstance) {
           }
         }
 
-        // A failed search still returns HTTP 200 with a prose apology, so log
-        // the tool's own error codes — otherwise it looks like nothing happened.
+        // A failed search still returns HTTP 200 with a confident-sounding answer
+        // built from training data. For a research request that is worse than an
+        // error — the caller can't tell a sourced answer from a remembered one —
+        // so say it in the response, not just the logs.
         if (searching) {
           const errors = searchErrorsFrom(json);
           const attempts = searchAttempts(json);
+
           if (errors.length) {
-            req.log.error(
-              { label: (req as any).appLabel, attempts, errors },
-              "web_search failed"
-            );
+            req.log.error({ label: (req as any).appLabel, attempts, errors }, "web_search failed");
           } else if (attempts === 0) {
             req.log.warn({ label: (req as any).appLabel }, "web_search never invoked");
+          }
+
+          const searched = attempts > 0 && errors.length < attempts;
+          if (!searched && out.choices[0]?.message) {
+            const why = errors.includes("too_many_requests")
+              ? "the web-search quota is currently exhausted"
+              : errors.length
+                ? `web search failed (${[...new Set(errors)].join(", ")})`
+                : "no web search was performed";
+            out.choices[0].message.content =
+              `> ⚠️ **Unverified — ${why}.** The answer below comes from the model's training data and may be out of date. Check it before relying on it.\n\n` +
+              out.choices[0].message.content;
           }
         }
 
