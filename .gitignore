@@ -14,3 +14,6 @@ dist/
 
 # Local metrics database (usage tracking)
 data/
+
+# CEG knowledge base — staff emails and decision rights. NEVER commit: this repo is public.
+knowledge/

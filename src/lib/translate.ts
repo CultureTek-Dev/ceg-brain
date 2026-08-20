@@ -32,7 +32,14 @@ function textOf(content: unknown): string {
 
 export function toAnthropicBody(
   body: OpenAIChatBody,
-  opts: { searchHandledLocally?: boolean; searchContext?: string } = {}
+  opts: {
+    searchHandledLocally?: boolean;
+    searchContext?: string;
+    /** CEG knowledge base, injected as a system block on the /v1/ceg route. */
+    knowledge?: string;
+    /** Mark the knowledge block cacheable — it is identical on every request. */
+    cacheKnowledge?: boolean;
+  } = {}
 ) {
   const system: string[] = [];
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -63,11 +70,24 @@ export function toAnthropicBody(
   // when the request presents as Claude Code: the FIRST system block must be the
   // Claude Code identity string. We use the array form so the caller's own system
   // prompt is preserved as a second block right after it.
+  //
+  // Block order is load-bearing: identity, then CEG knowledge, then the
+  // caller's own prompt. cache_control marks a cacheable prefix *through* the
+  // block it sits on, so putting it on the knowledge block caches identity plus
+  // knowledge together — the two parts that are byte-identical every call.
   const injectCC = config.backend === "subscription" && config.injectClaudeCodeSystem;
-  if (injectCC) {
-    const blocks: Array<{ type: "text"; text: string }> = [
-      { type: "text", text: config.claudeCodeSystem },
-    ];
+  type Block = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+
+  if (injectCC || opts.knowledge) {
+    const blocks: Block[] = [];
+    if (injectCC) blocks.push({ type: "text", text: config.claudeCodeSystem });
+    if (opts.knowledge) {
+      blocks.push({
+        type: "text",
+        text: opts.knowledge,
+        ...(opts.cacheKnowledge ? { cache_control: { type: "ephemeral" as const } } : {}),
+      });
+    }
     if (system.length) blocks.push({ type: "text", text: system.join("\n\n") });
     out.system = blocks;
   } else if (system.length) {

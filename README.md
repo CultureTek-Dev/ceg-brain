@@ -136,6 +136,53 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
 - Confirm your Claude **subscription** usage moves (not API credits). If you'd rather bill
   the API plane, set `BRAIN_BACKEND=api` with an `ANTHROPIC_API_KEY`.
 
+
+## CEG-aware inference — `/v1/ceg/chat/completions`
+
+Same OpenAI shape as `/v1/chat/completions`, but the model already knows CEG: its people
+and aliases, the four business units and their owners, the operating protocols, the routing
+map, the platform architecture. An app switches by changing `baseURL` — nothing else.
+
+```bash
+curl -s $BASE/v1/ceg/chat/completions -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"model":"sonnet","messages":[{"role":"user","content":"Who approves an invoice, and where do money questions go?"}]}'
+```
+
+**A separate route, not a flag.** The knowledge base is ~5,000 tokens on every request.
+A caller that only wants a model call shouldn't pay for the company's org chart because
+someone forgot to unset a flag — choosing the endpoint *is* the opt-in.
+
+### The knowledge lives outside this repo
+
+`CEG_KNOWLEDGE_DIR` points at a directory of `.md` files on the host. They are **not** in
+this repository and must never be: they contain staff emails, personal addresses and who may
+approve money, and **this repo is public**. `knowledge/` is gitignored as a backstop.
+
+```bash
+mkdir -p ~/ceg-brain/knowledge
+scp org/ceg/*.md  vps:~/ceg-brain/knowledge/     # from the private repo
+echo 'CEG_KNOWLEDGE_DIR=/root/ceg-brain/knowledge' >> ~/ceg-brain/.env
+```
+
+| Endpoint | Does |
+|---|---|
+| `GET /v1/ceg/knowledge` | What's loaded — files, bytes, when |
+| `POST /v1/ceg/knowledge/reload` | Re-read from disk after editing, no restart |
+
+### Notes
+
+- **It refuses rather than degrades.** With no knowledge loaded the route returns **503**.
+  Answering "as CEG" from a generic model in a confident tone is the exact failure this
+  endpoint exists to prevent.
+- **The block is prompt-cached.** It is byte-identical on every call, so `cache_control`
+  turns ~5k tokens of re-sent context into a cache read. `cacheRead` / `cacheWrite` are
+  logged per request so you can see whether it's working.
+- **Company knowledge, not this week's news.** It knows how CEG works, not what happened on
+  Tuesday. The prompt says so, and tells the model to decline rather than guess. Live
+  activity still comes from the Notion context bank via the Slack bot.
+- Plain `/v1/chat/completions` is untouched — same tokens, same behaviour.
+
 ## Web search
 
 Claude can search the web server-side and answer with citations — the caller still

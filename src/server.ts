@@ -2,6 +2,8 @@ import Fastify from "fastify";
 import { config } from "./config.js";
 import { registerChat } from "./routes/chat.js";
 import { registerDashboard } from "./routes/dashboard.js";
+import { registerCeg } from "./routes/ceg.js";
+import * as knowledge from "./lib/knowledge.js";
 import { LISTED_MODELS } from "./lib/models.js";
 import { getAuth } from "./auth/token.js";
 import * as metrics from "./lib/metrics.js";
@@ -30,11 +32,21 @@ app.get("/v1/models", async () => ({
 }));
 
 registerChat(app);
+registerCeg(app);
 registerDashboard(app);
 
 async function main() {
   // Open the metrics DB (no-op if METRICS_ENABLED=0).
   metrics.init();
+
+  // Load CEG's knowledge base once. Absent config just means /v1/ceg is
+  // unavailable; plain inference is unaffected.
+  const k = knowledge.load();
+  if (k.bytes) {
+    console.log(`[ceg-brain] knowledge: ${k.files.length} file(s), ${(k.bytes / 1024).toFixed(1)} KB — /v1/ceg ready`);
+  } else {
+    console.log("[ceg-brain] knowledge: not configured (CEG_KNOWLEDGE_DIR unset) — /v1/ceg will 503");
+  }
 
   // Fail fast if the subscription backend can't produce a token.
   try {

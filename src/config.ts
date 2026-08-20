@@ -64,6 +64,19 @@ export const config = {
     appendSources: (process.env.WEB_SEARCH_APPEND_SOURCES ?? "1") === "1",
   },
 
+  // --- CEG knowledge base --------------------------------------------------
+  // Markdown describing the company: people, units, products, protocols. Lives
+  // OUTSIDE this repo — it contains staff emails and decision rights, and this
+  // repository is public. Deployed to the VPS and pointed at by env.
+  knowledge: {
+    dir: process.env.CEG_KNOWLEDGE_DIR ?? "",
+    // Guards the prompt: the whole base rides on every /v1/ceg request.
+    maxBytes: Number(process.env.CEG_KNOWLEDGE_MAX_BYTES ?? 120_000),
+    // Anthropic prompt caching. The block is identical on every call, so caching
+    // it turns a few thousand tokens of re-sent context into a cache read.
+    cache: (process.env.CEG_KNOWLEDGE_CACHE ?? "1") === "1",
+  },
+
   // --- Brain-side search provider -----------------------------------------
   // When SEARCH_API_KEY is set, WE run the search and give Claude the results,
   // instead of using Anthropic's server-side tool (whose quota on the
